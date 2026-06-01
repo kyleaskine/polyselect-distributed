@@ -1,0 +1,26 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>poly-server — coverage</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 2rem; }
+  pre  { background: #f4f4f4; padding: 1rem; border-radius: 6px; }
+</style>
+<h1>polyselect-distributed</h1>
+<p>Coverage (no poly-quality leaderboard here — that needs compute the droplet lacks;
+   see DESIGN.md §1).</p>
+<pre id="out">loading…</pre>
+<script>
+  // Token comes from ?token=… in the URL (the HTML itself is unauthenticated, like ggnfs).
+  const token = new URLSearchParams(location.search).get("token") || "";
+  async function tick() {
+    try {
+      const r = await fetch("/stats", { headers: { Authorization: "Bearer " + token } });
+      document.getElementById("out").textContent =
+        r.ok ? JSON.stringify(await r.json(), null, 2) : "error " + r.status;
+    } catch (e) {
+      document.getElementById("out").textContent = "fetch failed: " + e;
+    }
+  }
+  tick();
+  setInterval(tick, 5000);
+</script>

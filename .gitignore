@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Server runtime state (per-job)
+*.db
+*.db-wal
+*.db-shm
+polys/
+jobdir/
+token
+
+# Client runtime state
+work/
+run-client.sh
+worktodo.ini
+coeff_list.txt
+*.ms
+*.ms.zst
+msieve.dat*
+
+# Cloned/built deps on a client box
+msieve-s/

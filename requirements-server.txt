@@ -1,0 +1,6 @@
+# poly-server (runs on the droplet). Python 3.10+
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2
+zstandard>=0.22      # store/stream .ms uploads compressed
+gmpy2>=2.1           # Phase 2: sampled algebraic verification (bignum mod-N)

@@ -1,0 +1,3 @@
+# poly-client (runs on a GPU box). Kept lean — no FastAPI here. Python 3.10+
+httpx>=0.27          # talk to the coordinator
+zstandard>=0.22      # compress msieve.dat.ms before upload
