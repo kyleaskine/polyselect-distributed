@@ -42,3 +42,14 @@ Worker traffic is plain HTTP + a low-privilege **worker token** on a private/sem
 network (same model as `ggnfs-distributed`). Everything privileged — `init`/`extend`/
 `prune` and `pull` — goes over your **SSH key** to the droplet; there is no admin HTTP
 surface. See DESIGN.md §8.
+
+## Tests
+
+No framework required — two scripts:
+
+- **`python3 tests/test_db.py`** — DB state machine + verify parser. Stdlib only; no deps, no GPU.
+- **`python3 tests/test_integration.py`** — full client↔server over real HTTP with a stub
+  msieve (lease → upload → sha+`c_d` verify → idempotency → 204). Needs the runtime deps
+  (`pip install -r requirements-server.txt -r requirements-client.txt`; `gmpy2` not required). No GPU.
+
+Neither replaces the real-msieve `coeff_list=1` validation on a GPU box (DESIGN.md §7).

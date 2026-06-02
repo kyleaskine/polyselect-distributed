@@ -15,8 +15,14 @@ line = exactly one a_d. (min_coeff=max_coeff=C does NOT work; see DESIGN.md §7.
 """
 from __future__ import annotations
 
+import os
 import pathlib
+import signal
 import subprocess
+
+
+class Cancelled(Exception):
+    """Raised by run() when the cancel callback asks it to stop."""
 
 
 def build_workdir(workdir: str, n: str, coeff: str) -> pathlib.Path:
@@ -35,22 +41,45 @@ def build_argv(msieve_bin: str, *, gpu: int, high_coeff_mult: int,
     return [msieve_bin, "-g", str(gpu), "-np1", "-nps", args]
 
 
+def _terminate(proc: subprocess.Popen) -> None:
+    """SIGTERM then SIGKILL the child's whole process group."""
+    try:
+        pgid = os.getpgid(proc.pid)
+    except ProcessLookupError:
+        return
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(pgid, sig)
+        except ProcessLookupError:
+            return
+        try:
+            proc.wait(timeout=5)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
 def run(msieve_bin: str, workdir: str, *, gpu: int, high_coeff_mult: int,
-        collengine: str = "gerbicz", colllib: str | None = None, cancel=None) -> pathlib.Path:
+        collengine: str = "gerbicz", colllib: str | None = None,
+        cancel=None, poll: float = 2.0) -> pathlib.Path:
     """Run msieve in `workdir`; return the path to msieve.dat.ms.
 
-    Runs in its own process group (start_new_session) so the client's Ctrl-C can
-    SIGTERM/SIGKILL the GPU child without racing the parent (mirrors ggnfs).
-
-    TODO Phase 1:
-      - poll `cancel()` while waiting and terminate the process group if set
-      - surface msieve's stderr/log on failure
-      - confirm a single-line coeff_list.txt yields exactly this one coefficient
+    Runs in its own process group (start_new_session=True) so the client can
+    SIGTERM/SIGKILL the whole GPU job on cancel without racing the parent. `cancel` is a
+    no-arg callable polled every `poll` seconds; truthy → kill the child and raise Cancelled.
     """
     argv = build_argv(msieve_bin, gpu=gpu, high_coeff_mult=high_coeff_mult,
                       collengine=collengine, colllib=colllib)
     proc = subprocess.Popen(argv, cwd=workdir, start_new_session=True)
-    proc.wait()  # TODO: cancellation polling instead of a blocking wait
+    while True:
+        try:
+            proc.wait(timeout=poll)
+            break
+        except subprocess.TimeoutExpired:
+            if cancel and cancel():
+                _terminate(proc)
+                raise Cancelled()
+
     out = pathlib.Path(workdir) / "msieve.dat.ms"
     if proc.returncode != 0 or not out.exists():
         raise RuntimeError(f"msieve failed (rc={proc.returncode}) or missing output {out}")

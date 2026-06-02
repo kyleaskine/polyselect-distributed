@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Stub msieve for the integration test. Ignores the -g/-np1/-nps args; reads the assigned
+# coefficient from coeff_list.txt and N from worktodo.ini in the cwd, and emits 3 degree-5
+# CADO records with c5 == coeff (or coeff+1 when STUB_BAD_C5 is set, to exercise rejection).
+set -e
+C=$(head -1 coeff_list.txt | tr -d '[:space:]')
+N=$(head -1 worktodo.ini | tr -d '[:space:]')
+if [ -n "${STUB_BAD_C5:-}" ]; then C=$((C + 1)); fi
+: > msieve.dat.ms
+for i in 1 2 3; do
+  printf 'n: %s\nc5: %s\nc4: 1\nc3: 2\nc2: 3\nc1: 4\nc0: %s\nY1: 6\nY0: -7\n\n' "$N" "$C" "$i" >> msieve.dat.ms
+done

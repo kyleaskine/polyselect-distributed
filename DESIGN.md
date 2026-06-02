@@ -121,7 +121,7 @@ extracted lib someday — is a drop-in swap with **no server/protocol change**.
 
 ## 8. Security / auth — worker token + SSH key
 
-The worker token is distributed widely (baked into `bootstrap-client.sh`, fetched onto
+The worker token is distributed widely (baked into `bootstrap-polyselect-client.sh`, fetched onto
 every rented box like ggnfs hardcodes its token), so it is **low-privilege**: `lease`,
 `submit`, `release`, `health`, `stats`. Rotatable.
 
@@ -143,22 +143,29 @@ SQLite (WAL) on the droplet, **metadata only**:
 - `job`/`meta` — N, degree, multiplier, deadline, collengine, worker token, how the
   coefficient list was sourced.
 - `workunits` — coeff, state, attempt_count, lease_expires, client_id.
-- `submissions`/`blobs` — workunit_id, sha256, bytes, poly_count, verify_status,
-  `archived` flag, path.
+- `submissions`/`blobs` — workunit_id, sha256 (raw .ms), comp_sha256 (stored .zst),
+  bytes, poly_count, verify_status, `archived` flag, path.
 
 Blobs on disk: `polys/<coeff>-<sha>.ms.zst`, content-addressed, referenced by path.
 **Never in the DB.**
 
-## 10. Verification (sampled, background)
+**Single-process by design:** one shared SQLite connection guarded by an in-process lock
+(lease's SELECT-then-UPDATE relies on it), so run exactly one uvicorn worker (the default).
 
-A background worker (concurrency 1, **off the upload path**) drains pending submissions.
-Per submission: stream-decompress, reservoir-sample `K` polys, and for each assert:
-1. `c_d == C` (the assigned coefficient — confirmed this holds for raw stage-1 output).
-2. Homogeneous root condition: `Σ_{i=0..d} c_i · (−Y0)^i · Y1^(d−i) ≡ 0 (mod N)`.
+## 10. Verification
 
-A handful of bignum mults per poly — trivial on a single core. Pass → workunit
-`verified`; fail → `available` (`attempt_count++`) → `poisoned` after max attempts.
-`K` via `--spotcheck-k` (default 50; 0 disables). Cheaper than ggnfs's norm check.
+**Phase 1 — inline, cheap (implemented).** `/submit` already stream-decompresses the
+upload to verify its sha256, so in the same path it parses the first `K` records
+(`--spotcheck-k`, default 50; 0 disables) and asserts each has `c_d == C` (the assigned
+coefficient). This reads only a tiny decompressed prefix and catches the realistic failure
+— a mismatched client build emitting the wrong coefficient or garbage — before it pollutes
+the corpus. Pass → submission `verify_status='passed'`; fail → blob deleted, workunit
+requeued (`attempt_count++`) → `poisoned` past the cap, client gets `422`.
+
+**Phase 2 — background, thorough.** A worker (concurrency 1, off the upload path)
+random-reservoir-samples across the whole file and adds the algebraic homomorphism check
+`Σ_{i=0..d} c_i · (−Y0)^i · Y1^(d−i) ≡ 0 (mod N)` (gmpy2), advancing `submitted → verified`.
+A handful of bignum mults per poly; cheaper than ggnfs's norm check.
 
 ## 11. Pull / prune lifecycle
 
@@ -174,7 +181,7 @@ Disk is comfortable — droplets have 25 GB and a job's corpus is rarely past ~2
 uncompressed — so prune is **workflow convenience** (automating the manual copy-down-then-
 delete ritual), not a capacity safeguard. Blobs always stored zstd-compressed.
 
-## 12. Bootstrap (`bootstrap-client.sh`)
+## 12. Bootstrap (`bootstrap-polyselect-client.sh`)
 
 Like ggnfs's, adapted for GPU + clone-and-build:
 1. Check prereqs: CUDA toolkit (`nvcc`), gcc/make, git, python3, zstd, gmp.
@@ -186,12 +193,13 @@ Like ggnfs's, adapted for GPU + clone-and-build:
 
 ## 13. Phased build plan
 
-- **Phase 1 — MVP coordinator + client.** Server: `init` (ingest an explicit coefficient
-  list), `extend`, `lease`, `submit`, store, coverage dashboard. Client: wrap full msieve
-  via `coeff_list`, drain/cancel. `bootstrap-client.sh`. Goal: a coefficient list flowing
-  client→server end-to-end. *(Verification + pull/prune come next.)*
-- **Phase 2 — durability + ops.** Sampled verification; `pull` (rsync) + `prune`
-  subcommand; disk gauge.
+- **Phase 1 — MVP coordinator + client (implemented; live HTTP path pending a deps-installed run).**
+  Server: `init` (explicit coefficient list; `--force` reinit), `extend`, `lease`,
+  idempotent streaming sha-verified `submit` + cheap inline `c_d`/parseability check,
+  store, coverage dashboard, lease-expiry sweep. Client: wrap full msieve via `coeff_list`,
+  streaming upload, drain/cancel, retry-through-outage. `bootstrap-polyselect-client.sh`.
+- **Phase 2 — durability + ops.** Background mod-N verifier; `pull` (rsync) + `prune`
+  subcommand (uses the `comp_sha256` manifest); disk gauge.
 - **Phase 3 — leaner client.** Trimmed `make polyselect-stage1` target.
 - **Future.** msieve-free client (true stage-1 extraction); server-side quality
   leaderboard *if* the server ever gets compute; multi-GPU per box; lease heartbeats.

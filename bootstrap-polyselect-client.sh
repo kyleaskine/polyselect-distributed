@@ -10,7 +10,7 @@
 set -euo pipefail
 
 MSIEVE_REPO="https://github.com/kyleaskine/msieve-s"
-CLIENT_REPO="https://github.com/kyleaskine/polyselect-distributed"   # TODO: confirm/publish repo
+CLIENT_REPO="https://github.com/kyleaskine/polyselect-distributed"
 MSIEVE_DIR="msieve-s"
 CLIENT_DIR="polyselect-distributed"
 
@@ -28,8 +28,9 @@ prompt_tty() {
 # 1. Prerequisites (clone-and-build needs the CUDA toolchain on the box).
 missing=""
 need() { command -v "$1" >/dev/null 2>&1 || missing="$missing $2"; }
-need nvcc    "the CUDA toolkit (nvcc)"
-need gcc     build-essential
+need nvcc       "the CUDA toolkit (nvcc)"
+need nvidia-smi "the NVIDIA driver (nvidia-smi)"
+need gcc        build-essential
 need make    build-essential
 need git     git
 need python3 python3
@@ -49,10 +50,17 @@ else
     git clone "$MSIEVE_REPO" "$MSIEVE_DIR"
 fi
 if [ ! -x "$MSIEVE_DIR/msieve" ]; then
-    echo "==> building msieve (GPU)"
-    # TODO: set the correct CUDA build line / -arch for this box (see msieve-s/Makefile).
-    #       Phase 3 will add a trimmed 'make polyselect-stage1' target.
-    ( cd "$MSIEVE_DIR" && make all CUDA=1 )
+    # msieve builds with `make all CUDA=<CC>` where CC is the GPU compute capability
+    # with the dot removed (RTX 5070 / sm_120 -> 120, sm_89 -> 89). Auto-detect from the
+    # driver; override with CUDA_CC=NNN for heterogeneous boxes. Phase 3 will add a trimmed
+    # 'make polyselect-stage1' target.
+    CUDA_CC="${CUDA_CC:-$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d ' .')}"
+    if [ -z "$CUDA_CC" ]; then
+        prompt_tty CUDA_CC "GPU compute capability for the msieve build (e.g. 120)" ""
+    fi
+    [ -n "$CUDA_CC" ] || { echo "error: could not determine GPU compute capability; rerun with CUDA_CC=NNN" >&2; exit 1; }
+    echo "==> building msieve for CUDA=$CUDA_CC (GPU stage-1)"
+    ( cd "$MSIEVE_DIR" && make all CUDA="$CUDA_CC" )
 fi
 MSIEVE_BIN="$(cd "$MSIEVE_DIR" && pwd)/msieve"
 COLLLIB="$(cd "$MSIEVE_DIR" && pwd)/cub/collision_engine.so"

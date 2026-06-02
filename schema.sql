@@ -24,7 +24,8 @@ CREATE INDEX IF NOT EXISTS idx_wu_state ON workunits(state, lease_expires);
 CREATE TABLE IF NOT EXISTS submissions (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     workunit_id   TEXT NOT NULL REFERENCES workunits(id),
-    sha256        TEXT NOT NULL,                     -- sha256 of the *uncompressed* .ms
+    sha256        TEXT NOT NULL,                     -- sha256 of the *uncompressed* .ms (also in the filename)
+    comp_sha256   TEXT,                              -- sha256 of the stored .ms.zst (prune manifest, Phase 2)
     bytes         INTEGER NOT NULL,                  -- stored (compressed) size
     poly_count    INTEGER,                           -- client-reported; corrected by the verifier
     verify_status TEXT NOT NULL DEFAULT 'pending',   -- pending|passed|failed|skipped
