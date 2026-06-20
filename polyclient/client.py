@@ -35,18 +35,19 @@ def _file_chunks(path, size=_CHUNK):
 
 class Client:
     def __init__(self, server_url, token, msieve_bin, *, gpu=0, client_id="worker",
-                 colllib=None, workroot="work", idle_sleep=30, retry_sleep=15):
+                 workroot="work", idle_sleep=30, retry_sleep=15, max_failures=3):
         self.server = server_url.rstrip("/")
         self.headers = {"Authorization": f"Bearer {token}"}
         self.msieve_bin = msieve_bin
         self.gpu = gpu
         self.client_id = client_id
-        self.colllib = colllib
         self.workroot = pathlib.Path(workroot)
         self.idle_sleep = idle_sleep
         self.retry_sleep = retry_sleep
-        self._drain = threading.Event()   # stop leasing new work; finish the current unit
-        self._cancel = threading.Event()  # kill current msieve + release + exit
+        self.max_failures = max_failures   # consecutive msieve failures before giving up
+        self._drain = threading.Event()    # stop leasing new work; finish the current unit
+        self._cancel = threading.Event()   # kill current msieve + release + exit
+        self._held = None                  # workunit_id of the lease we currently hold
 
     # ---- signal handling (installed in loop(), which runs on the main thread) ----
     def _on_sigint(self, *_):
@@ -56,6 +57,11 @@ class Client:
         else:
             print("\n[cancel] killing msieve and releasing the lease.", flush=True)
             self._cancel.set()
+
+    def _on_sigterm(self, *_):
+        # systemd stop / kill: clean immediate stop — kill msieve, release lease, exit.
+        print("\n[term] SIGTERM — killing msieve, releasing lease, exiting.", flush=True)
+        self._cancel.set()
 
     # ---- HTTP ----
     def _lease(self):
@@ -83,13 +89,16 @@ class Client:
 
     # ---- one unit of work ----
     def _run_unit(self, lease):
+        """Run one workunit. Returns True if the lease was resolved server-side (submitted,
+        or a 4xx the server already handled) so the caller must NOT release it; returns None
+        if it bailed still holding the lease (cancel mid-upload). Raises on msieve failure."""
         job, coeff, wu = lease["job"], lease["coeff"], lease["workunit_id"]
         workdir = self.workroot / wu
-        msieve_runner.build_workdir(str(workdir), job["N"], coeff)
+        msieve_runner.build_workdir(str(workdir), job["N"], coeff, self.msieve_bin)
         ms = msieve_runner.run(
             self.msieve_bin, str(workdir), gpu=self.gpu,
             high_coeff_mult=job["high_coeff_mult"],
-            collengine=job.get("collengine", "gerbicz"), colllib=self.colllib,
+            collengine=job.get("collengine", "gerbicz"),
             cancel=self._cancel.is_set,
         )
 
@@ -116,44 +125,70 @@ class Client:
                 self._submit(wu, zst, sha, poly_count)
                 print(f"[done] {wu} coeff={coeff} polys~{poly_count} ({zst.stat().st_size} B zstd)", flush=True)
                 shutil.rmtree(workdir, ignore_errors=True)
-                return
+                return True   # resolved: leased→submitted; caller must not release
             except httpx.HTTPStatusError as e:
                 code = e.response.status_code
                 if 400 <= code < 500:
                     body = e.response.text[:200]
                     print(f"[submit] {wu} rejected {code}: {body} — server handled it; moving on", flush=True)
-                    return  # do not retry a 4xx; keep {ms},{zst} locally for inspection
+                    return True  # 4xx: server already resolved the lease (don't retry, don't release)
                 print(f"[submit] {wu} server error {code}; retry in {self.retry_sleep}s", flush=True)
                 time.sleep(self.retry_sleep)
             except httpx.HTTPError as e:
                 print(f"[submit] {wu} unreachable ({e}); kept {zst}, retry in {self.retry_sleep}s", flush=True)
                 time.sleep(self.retry_sleep)
+        return None  # exited the retry loop on cancel — still holding the lease
 
     # ---- main loop ----
     def loop(self):
         signal.signal(signal.SIGINT, self._on_sigint)
+        signal.signal(signal.SIGTERM, self._on_sigterm)
         self.workroot.mkdir(parents=True, exist_ok=True)
         print(f"[start] {self.client_id} gpu={self.gpu} -> {self.server}", flush=True)
-        while not self._drain.is_set() and not self._cancel.is_set():
-            try:
-                lease = self._lease()
-            except httpx.HTTPError as e:
-                print(f"[lease] server unreachable ({e}); retry in {self.retry_sleep}s", flush=True)
-                if self._wait(self.retry_sleep):
+        fails = 0
+        try:
+            while not self._drain.is_set() and not self._cancel.is_set():
+                try:
+                    lease = self._lease()
+                except httpx.HTTPError as e:
+                    print(f"[lease] server unreachable ({e}); retry in {self.retry_sleep}s", flush=True)
+                    if self._wait(self.retry_sleep):
+                        break
+                    continue
+                if lease is None:
+                    print("[idle] no work available", flush=True)
+                    if self._wait(self.idle_sleep):
+                        break
+                    continue
+
+                wu = self._held = lease["workunit_id"]
+                resolved = None
+                try:
+                    resolved = self._run_unit(lease)
+                except msieve_runner.Cancelled:
+                    pass  # cancel: released in the finally, then we break below
+                except Exception as e:  # msieve crash / unexpected: don't die holding the lease
+                    fails += 1
+                    print(f"[error] {wu} failed ({e}); releasing lease [{fails} consecutive]", flush=True)
+                finally:
+                    if not resolved:        # exception or cancel — return the lease (server no-op if
+                        self._release(wu)   # it's already resolved); on success _run_unit returned True
+                    self._held = None
+
+                if resolved:
+                    fails = 0
+                elif fails >= self.max_failures:
+                    print(f"[fatal] {fails} consecutive failures — check the client/msieve setup; "
+                          f"exiting.", flush=True)
                     break
-                continue
-            if lease is None:
-                print("[idle] no work available", flush=True)
-                if self._wait(self.idle_sleep):
+                if self._cancel.is_set():
                     break
-                continue
-            try:
-                self._run_unit(lease)
-            except msieve_runner.Cancelled:
-                pass  # cancel handled below
-            if self._cancel.is_set():
-                self._release(lease["workunit_id"])
-                break
+                if not resolved and not self._drain.is_set() and self._wait(self.retry_sleep):
+                    break
+        finally:
+            if self._held:                  # last-ditch: never exit holding a lease
+                self._release(self._held)
+                self._held = None
         print("[stopped]", flush=True)
 
     def _wait(self, seconds):
