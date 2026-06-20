@@ -28,7 +28,7 @@ pip install -r requirements-server.txt -r requirements-client.txt
 
 # Server (on the droplet). init/extend/prune are run over SSH; serve runs the worker API.
 python3 -m polyserver init  --jobdir DIR --worktodo worktodo.ini \
-        --coeff-list coeff_list.txt --high-coeff-mult 60060 [--degree 5] [--force]
+        --coeff-list coeff_list.txt [--high-coeff-mult M] [--degree 5] [--force]
 python3 -m polyserver serve  --jobdir DIR --bind 0.0.0.0 --port 8080   # single process only
 python3 -m polyserver extend --jobdir DIR --coeff-list more_coeffs.txt
 
@@ -68,7 +68,10 @@ INI) and `coeff_list.txt` (the one coefficient), then run
 **`coeff_list=1` is load-bearing**: it makes stage 1 read coefficients straight from
 `coeff_list.txt` and sieve each directly (`stage1.c:487-521`), bypassing the `find_next_ad`
 range enumerator → one line = exactly one `a_d`. `min_coeff=max_coeff=C` does **not** work
-(DESIGN.md §2, §7). Output is `<workdir>/msieve.dat.ms`. msieve runs in its own process
+(DESIGN.md §2, §7). **`high_coeff_mult` is inert in coeff_list mode** — it only feeds the
+range enumerator, which this path skips; per-coeff bounds come from `stage1_bounds_update`
+(derived from the actual `a_d`), so `--high-coeff-mult` is optional and the client omits it
+when unset. Output is `<workdir>/msieve.dat.ms`. msieve runs in its own process
 group so cancel can SIGTERM/SIGKILL the whole GPU job.
 
 ### Workunit state machine (`polyserver/db.py`)

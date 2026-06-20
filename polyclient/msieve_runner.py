@@ -33,9 +33,14 @@ def build_workdir(workdir: str, n: str, coeff: str) -> pathlib.Path:
     return d
 
 
-def build_argv(msieve_bin: str, *, gpu: int, high_coeff_mult: int,
+def build_argv(msieve_bin: str, *, gpu: int, high_coeff_mult: int = 0,
                collengine: str = "gerbicz", colllib: str | None = None) -> list[str]:
-    args = f"coeff_list=1 high_coeff_mult={high_coeff_mult} collengine={collengine}"
+    # high_coeff_mult is inert in coeff_list mode (only the range enumerator reads it; see
+    # DESIGN.md §7), so omit it when unset (0). Still emitted when nonzero for back-compat.
+    args = "coeff_list=1"
+    if high_coeff_mult:
+        args += f" high_coeff_mult={high_coeff_mult}"
+    args += f" collengine={collengine}"
     if colllib:
         args += f" colllib={colllib}"
     return [msieve_bin, "-g", str(gpu), "-np1", "-nps", args]
@@ -59,7 +64,7 @@ def _terminate(proc: subprocess.Popen) -> None:
             continue
 
 
-def run(msieve_bin: str, workdir: str, *, gpu: int, high_coeff_mult: int,
+def run(msieve_bin: str, workdir: str, *, gpu: int, high_coeff_mult: int = 0,
         collengine: str = "gerbicz", colllib: str | None = None,
         cancel=None, poll: float = 2.0) -> pathlib.Path:
     """Run msieve in `workdir`; return the path to msieve.dat.ms.

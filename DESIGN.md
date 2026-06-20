@@ -105,7 +105,12 @@ one per line):
   directly (`stage1.c:487–521`), bypassing the `find_next_ad` range enumerator — so one
   line = exactly one `a_d`, deterministically. (`min_coeff=max_coeff=C` does **not** work:
   `find_next_ad` only emits smooth `a_d ≤ max_coeff` and the single candidate `k=1` is
-  threshold-fragile.) `high_coeff_mult=M` is still passed for internal bounds.
+  threshold-fragile.) `high_coeff_mult=M` is **inert** in this mode — it is read only by the
+  range enumerator (`init_ad_sieve`/`find_next_ad`), which `coeff_list=1` skips entirely.
+  The per-coefficient bounds *are* set, by `stage1_bounds_update` (`stage1.c:40`), but that
+  derives `m0`/skewness/`coeff_max`/norm bounds purely from the actual `a_d`, `N`, degree,
+  and `norm_max` — never the multiplier. So passing `M` is a harmless no-op; the client may
+  still send it (back-compat) or omit it.
 - `N` comes from `worktodo.ini` in the workdir; degree + norms auto-derive from `N`
   (consistent across clients since `N` is fixed for the job).
 - Output: `<workdir>/msieve.dat.ms` (CADO-format raw polys, every `c_d == C`). Client

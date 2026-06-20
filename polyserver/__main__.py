@@ -3,7 +3,7 @@
 init/extend/prune are run on the droplet over SSH. serve runs the worker API.
 
     python3 -m polyserver init   --jobdir DIR --worktodo worktodo.ini \
-                                 --coeff-list coeff_list.txt --high-coeff-mult 60060 [--force]
+                                 --coeff-list coeff_list.txt [--high-coeff-mult M] [--force]
     python3 -m polyserver serve  --jobdir DIR --bind 0.0.0.0 --port 8080
     python3 -m polyserver extend --jobdir DIR --coeff-list more_coeffs.txt
     python3 -m polyserver prune  --jobdir DIR --confirm
@@ -129,7 +129,9 @@ def main(argv=None):
     g.add_argument("--worktodo", help="path to worktodo.ini (bare decimal N)")
     g.add_argument("--n", help="the composite N as a decimal string")
     pi.add_argument("--degree", type=int, default=5)
-    pi.add_argument("--high-coeff-mult", type=int, required=True, dest="high_coeff_mult")
+    pi.add_argument("--high-coeff-mult", type=int, default=0, dest="high_coeff_mult",
+                    help="leading-coeff multiplier M; INERT in coeff_list mode (only the "
+                         "range enumerator reads it). Optional; default 0 = omit. See DESIGN.md §7.")
     pi.add_argument("--deadline", type=int, default=8640000, help="CPU-seconds per coeff")
     pi.add_argument("--collengine", default="gerbicz")
     pi.add_argument("--worker-token", dest="worker_token", default=None,
