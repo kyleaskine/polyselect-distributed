@@ -14,8 +14,13 @@ CLIENT_REPO="https://github.com/kyleaskine/polyselect-distributed"
 MSIEVE_DIR="msieve-s"
 CLIENT_DIR="polyselect-distributed"
 
-DEFAULT_SERVER="http://CHANGE-ME:8080"
-DEFAULT_TOKEN="CHANGE-ME"
+# Do NOT hardcode the real token here — this file is in a (public) repo; a committed token
+# is world-readable and lets anyone lease/submit/pollute, and it lingers in git history.
+# Inject at run time:  POLY_SERVER=http://HOST:8084 POLY_TOKEN=xxxx curl -fsSL URL | bash
+# or bake the real values only into the copy you serve from the web server (not git), or just
+# type them at the prompts below.
+DEFAULT_SERVER="${POLY_SERVER:-http://CHANGE-ME:8084}"
+DEFAULT_TOKEN="${POLY_TOKEN:-CHANGE-ME}"
 
 # When piped via `curl ... | bash`, read prompts from the terminal, not the pipe.
 prompt_tty() {
@@ -63,7 +68,8 @@ if [ ! -x "$MSIEVE_DIR/msieve" ]; then
     ( cd "$MSIEVE_DIR" && make all CUDA="$CUDA_CC" )
 fi
 MSIEVE_BIN="$(cd "$MSIEVE_DIR" && pwd)/msieve"
-COLLLIB="$(cd "$MSIEVE_DIR" && pwd)/cub/collision_engine.so"
+# No COLLLIB: the client symlinks cub/ + stage1_core.ptx into each workunit dir, so msieve's
+# relative defaults resolve and no --colllib/--sortlib is needed (see polyclient/msieve_runner.py).
 
 # 3. Clone this repo + set up a lean Python env for the client.
 if [ -d "$CLIENT_DIR/.git" ]; then
@@ -93,7 +99,7 @@ cd "$ABS"
 . .venv/bin/activate
 exec python3 -m polyclient \\
     --server-url="$SERVER" --token="$TOKEN" \\
-    --msieve="$MSIEVE_BIN" --colllib="$COLLLIB" \\
+    --msieve="$MSIEVE_BIN" \\
     --gpu="$GPU" --client-id="$CLIENT_ID"
 EOF
 chmod +x run-client.sh
