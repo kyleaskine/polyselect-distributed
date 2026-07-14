@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
-# Stub msieve for the integration test. Ignores the -g/-np1/-nps args; reads the assigned
-# coefficient from coeff_list.txt and N from worktodo.ini in the cwd, and emits 3 degree-5
-# CADO records with c5 == coeff (or coeff+1 when STUB_BAD_C5 is set, to exercise rejection).
+# Stub msieve for the tests. Ignores the -g/-np1/-nps flags; reads N from worktodo.ini and the
+# leading coefficient from coeff_list.txt (coeff_list mode) or, when that file is absent, from
+# min_coeff= in the argument string (range mode, as polylocal uses). Emits 3 degree-5 CADO
+# records with c5 == that coefficient (or coeff+1 when STUB_BAD_C5 is set, to exercise rejection).
 set -e
-C=$(head -1 coeff_list.txt | tr -d '[:space:]')
 N=$(head -1 worktodo.ini | tr -d '[:space:]')
+if [ -f coeff_list.txt ]; then
+  C=$(head -1 coeff_list.txt | tr -d '[:space:]')
+else
+  C=$(printf '%s\n' "$@" | grep -oE 'min_coeff=[0-9]+' | head -1 | cut -d= -f2)
+  C=${C:-1}
+fi
 if [ -n "${STUB_BAD_C5:-}" ]; then C=$((C + 1)); fi
 : > msieve.dat.ms
 for i in 1 2 3; do

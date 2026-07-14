@@ -32,12 +32,13 @@ class Cancelled(Exception):
     """Raised by run() when the cancel callback asks it to stop."""
 
 
-def build_workdir(workdir: str, n: str, coeff: str,
+def build_workdir(workdir: str, n: str, coeff: str | None = None,
                   msieve_bin: str | None = None) -> pathlib.Path:
     d = pathlib.Path(workdir)
     d.mkdir(parents=True, exist_ok=True)
     (d / "worktodo.ini").write_text(n.strip() + "\n")
-    (d / "coeff_list.txt").write_text(str(coeff).strip() + "\n")
+    if coeff is not None:                 # coeff_list mode writes the file; range mode omits it
+        (d / "coeff_list.txt").write_text(str(coeff).strip() + "\n")
     if msieve_bin:
         _link_support_files(d, pathlib.Path(msieve_bin).resolve().parent)
     return d
@@ -59,15 +60,33 @@ def _link_support_files(workdir: pathlib.Path, ms_dir: pathlib.Path) -> None:
 
 
 def build_argv(msieve_bin: str, *, gpu: int, high_coeff_mult: int = 0,
-               collengine: str = "gerbicz") -> list[str]:
-    # high_coeff_mult is inert in coeff_list mode (only the range enumerator reads it; see
-    # DESIGN.md §7), so omit it when unset (0). Still emitted when nonzero for back-compat.
-    # No colllib=/sortlib=: build_workdir symlinks cub/ so msieve's relative defaults resolve.
-    args = "coeff_list=1"
-    if high_coeff_mult:
-        args += f" high_coeff_mult={high_coeff_mult}"
-    args += f" collengine={collengine}"
-    return [msieve_bin, "-g", str(gpu), "-np1", "-nps", args]
+               collengine: str = "gerbicz", coeff_list: bool = True,
+               min_coeff: int | None = None, num_polys: int | None = None) -> list[str]:
+    """Build the msieve stage-1 argv. Two modes:
+
+      coeff_list (default): read a_d from coeff_list.txt — the distributed path. high_coeff_mult
+        is inert here (only the range enumerator reads it; DESIGN.md §7), emitted only when
+        nonzero for back-compat.
+      range (coeff_list=False): let msieve enumerate smooth leading coeffs a_d = k*high_coeff_mult
+        from min_coeff upward, stopping after num_polys polynomials (the num_polys= patch). Used
+        by polylocal for a single local run so no coeff_list needs curating.
+
+    No colllib=/sortlib=: build_workdir symlinks cub/ so msieve's relative defaults resolve.
+    """
+    parts: list[str] = []
+    if coeff_list:
+        parts.append("coeff_list=1")
+        if high_coeff_mult:
+            parts.append(f"high_coeff_mult={high_coeff_mult}")
+    else:
+        if min_coeff is not None:
+            parts.append(f"min_coeff={min_coeff}")
+        if high_coeff_mult:
+            parts.append(f"high_coeff_mult={high_coeff_mult}")
+        if num_polys:
+            parts.append(f"num_polys={num_polys}")
+    parts.append(f"collengine={collengine}")
+    return [msieve_bin, "-g", str(gpu), "-np1", "-nps", " ".join(parts)]
 
 
 def _terminate(proc: subprocess.Popen) -> None:
@@ -89,16 +108,19 @@ def _terminate(proc: subprocess.Popen) -> None:
 
 
 def run(msieve_bin: str, workdir: str, *, gpu: int, high_coeff_mult: int = 0,
-        collengine: str = "gerbicz", cancel=None, poll: float = 2.0) -> pathlib.Path:
+        collengine: str = "gerbicz", coeff_list: bool = True, min_coeff: int | None = None,
+        num_polys: int | None = None, cancel=None, poll: float = 2.0) -> pathlib.Path:
     """Run msieve in `workdir`; return the path to msieve.dat.ms.
 
     Runs in its own process group (start_new_session=True) so the client can
     SIGTERM/SIGKILL the whole GPU job on cancel without racing the parent. `cancel` is a
     no-arg callable polled every `poll` seconds; truthy → kill the child and raise Cancelled.
-    Assumes build_workdir already linked the support files into `workdir`.
+    Assumes build_workdir already linked the support files into `workdir`. See build_argv for
+    coeff_list vs range mode (min_coeff/num_polys).
     """
     argv = build_argv(msieve_bin, gpu=gpu, high_coeff_mult=high_coeff_mult,
-                      collengine=collengine)
+                      collengine=collengine, coeff_list=coeff_list,
+                      min_coeff=min_coeff, num_polys=num_polys)
     proc = subprocess.Popen(argv, cwd=workdir, start_new_session=True)
     while True:
         try:

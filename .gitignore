@@ -13,6 +13,10 @@ polys/
 jobdir/
 token
 
+# polylocal real config (the .example is checked in)
+polylocal.ini
+polylocal-work/
+
 # Client runtime state
 work/
 run-client.sh

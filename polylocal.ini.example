@@ -1,0 +1,24 @@
+# polylocal configuration — copy to polylocal.ini (gitignored) and fill in real values:
+#     cp polylocal.ini.example polylocal.ini
+# Precedence for every setting: CLI flag > environment variable > this file > built-in default.
+[polylocal]
+# aliquot-tracker base URL (the gnfs-candidates feed + the polynomial submit endpoint)
+tracker_url = http://aliquot.kyleaskine.com:3002
+
+# Credential for submitting polynomials — set ONE (api_key is usually what you want).
+# Keep polylocal.ini gitignored either way.
+#   api_key      your personal API key (sent as X-Api-Key); your tracker account must be admin
+#   internal_key the tracker's shared INTERNAL_API_KEY (X-Internal-Key), i.e. the server secret
+api_key = REPLACE_ME
+# internal_key = REPLACE_ME
+
+# path to the patched msieve binary (must support the num_polys= flag)
+msieve = /home/kylea/msieve-s/msieve
+
+# path to the size/root optimization script (only needed for --optimize)
+nfs_optimize = /home/kylea/msieve-s/nfs_optimize.sh
+
+# optional defaults (uncomment to override the built-ins)
+# gpu = 0
+# workdir = polylocal-work
+# min_digits = 145
