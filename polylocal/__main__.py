@@ -150,10 +150,10 @@ def _resolve_msieve(path, *, required):
 # Below _MIN_DIGITS is too small for this workflow; above the top tier needs explicit flags.
 _MIN_DIGITS = 145
 _PARAM_TABLE = [
-    (156, 420,     400_000),
-    (166, 2520,    800_000),
-    (177, 27720,   1_200_000),
-    (188, 138600,  1_600_000),
+    (159, 420,     400_000),
+    (173, 2520,    800_000),
+    (187, 27720,   1_200_000),
+    (201, 138600,  1_600_000),
 ]
 
 
@@ -204,9 +204,13 @@ def _run_selection(msieve, n, params, workdir, *, gpu):
     # (our msieve num_polys= patch). collengine=gerbicz always (strictly better).
     min_coeff, high_coeff_mult, num_polys = params
     wd = msieve_runner.build_workdir(str(workdir), n, msieve_bin=str(msieve))  # no coeff_list.txt
+    # forward_sigint: this is an interactive one-shot, so relay a terminal Ctrl-C into msieve's
+    # own (separate) process group. msieve stops the search gracefully, keeping the polys it
+    # already wrote, and the pipeline continues with that partial corpus.
     return msieve_runner.run(str(msieve), str(wd), gpu=gpu, collengine="gerbicz",
                              coeff_list=False, min_coeff=min_coeff,
-                             high_coeff_mult=high_coeff_mult, num_polys=num_polys)
+                             high_coeff_mult=high_coeff_mult, num_polys=num_polys,
+                             forward_sigint=True)
 
 
 def _prepare_supplied(text, n):

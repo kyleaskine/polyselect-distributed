@@ -109,7 +109,8 @@ def _terminate(proc: subprocess.Popen) -> None:
 
 def run(msieve_bin: str, workdir: str, *, gpu: int, high_coeff_mult: int = 0,
         collengine: str = "gerbicz", coeff_list: bool = True, min_coeff: int | None = None,
-        num_polys: int | None = None, cancel=None, poll: float = 2.0) -> pathlib.Path:
+        num_polys: int | None = None, cancel=None, poll: float = 2.0,
+        forward_sigint: bool = False) -> pathlib.Path:
     """Run msieve in `workdir`; return the path to msieve.dat.ms.
 
     Runs in its own process group (start_new_session=True) so the client can
@@ -117,19 +118,37 @@ def run(msieve_bin: str, workdir: str, *, gpu: int, high_coeff_mult: int = 0,
     no-arg callable polled every `poll` seconds; truthy → kill the child and raise Cancelled.
     Assumes build_workdir already linked the support files into `workdir`. See build_argv for
     coeff_list vs range mode (min_coeff/num_polys).
+
+    Because the child is in its own session, a terminal Ctrl-C reaches only the parent, not
+    msieve. `forward_sigint=True` (the interactive polylocal path) installs a SIGINT handler
+    that relays the signal into the child's process group, so msieve stops itself gracefully —
+    it flushes the polys already found to msieve.dat.ms and exits, and this returns that
+    partial corpus normally. Off by default: polyclient wants the hard cancel path above.
     """
     argv = build_argv(msieve_bin, gpu=gpu, high_coeff_mult=high_coeff_mult,
                       collengine=collengine, coeff_list=coeff_list,
                       min_coeff=min_coeff, num_polys=num_polys)
     proc = subprocess.Popen(argv, cwd=workdir, start_new_session=True)
-    while True:
-        try:
-            proc.wait(timeout=poll)
-            break
-        except subprocess.TimeoutExpired:
-            if cancel and cancel():
-                _terminate(proc)
-                raise Cancelled()
+    prev_sigint = None
+    if forward_sigint:
+        def _relay(_signum, _frame):
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGINT)
+            except ProcessLookupError:
+                pass
+        prev_sigint = signal.signal(signal.SIGINT, _relay)
+    try:
+        while True:
+            try:
+                proc.wait(timeout=poll)
+                break
+            except subprocess.TimeoutExpired:
+                if cancel and cancel():
+                    _terminate(proc)
+                    raise Cancelled()
+    finally:
+        if forward_sigint:
+            signal.signal(signal.SIGINT, prev_sigint)
 
     out = pathlib.Path(workdir) / "msieve.dat.ms"
     if proc.returncode != 0 or not out.exists():

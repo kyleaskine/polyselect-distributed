@@ -150,13 +150,13 @@ def main():
         assert cli._params_for(187, **base_args) == (138600, 138600, 1_600_000)
         assert cli._params_for(160, min_coeff=None, high_coeff_mult=None,
                                num_polys=2_000_000) == (2520, 2520, 2_000_000)   # per-flag override
-        for d in (140, 200):                                   # too small / above table -> exit
+        for d in (140, 210):                                   # too small / above table -> exit
             try:
                 cli._params_for(d, **base_args)
                 assert False, f"expected SystemExit for {d} digits"
             except SystemExit:
                 pass
-        assert cli._params_for(200, min_coeff=99, high_coeff_mult=99, num_polys=5) == (99, 99, 5)
+        assert cli._params_for(210, min_coeff=99, high_coeff_mult=99, num_polys=5) == (99, 99, 5)
         nps = msieve_runner.build_argv("ms", gpu=0, coeff_list=False, min_coeff=2520,
                                        high_coeff_mult=2520, num_polys=800_000)[-1]
         assert "coeff_list=1" not in nps and "min_coeff=2520" in nps and "num_polys=800000" in nps
@@ -196,13 +196,13 @@ def main():
         assert cli._coerce_digits("166") == 166 and cli._coerce_digits(None) is None  # #5
         assert cli._coerce_digits("x") is None
         run = dict(poly_file=None, min_coeff=None, high_coeff_mult=None, num_polys=None)
-        assert cli._is_runnable(160, **run) and not cli._is_runnable(200, **run)      # #3
+        assert cli._is_runnable(160, **run) and not cli._is_runnable(210, **run)      # #3
         assert not cli._is_runnable(140, **run)
-        assert cli._is_runnable(200, poly_file="x", min_coeff=None, high_coeff_mult=None, num_polys=None)
+        assert cli._is_runnable(210, poly_file="x", min_coeff=None, high_coeff_mult=None, num_polys=None)
         assert cli._is_runnable(9999, poly_file=None, min_coeff=1, high_coeff_mult=1, num_polys=1)
         assert cli._params_for(160, min_coeff=None, high_coeff_mult=None,
                                num_polys=0) == (2520, 2520, 0)                # #6 explicit 0 kept
-        assert cli._params_for(200, min_coeff=420, high_coeff_mult=420, num_polys=0) == (420, 420, 0)
+        assert cli._params_for(210, min_coeff=420, high_coeff_mult=420, num_polys=0) == (420, 420, 0)
         crlf = (cado_block("2.00e-09") + "\n" + cado_block("4.00e-09")).replace("\n", "\r\n")
         (_pt2, me2), nc = optimize.extract_best_and_count(crlf, N)            # #7 CRLF + #9 count
         assert me2 == 4.00e-09 and nc == 2, (me2, nc)
@@ -310,7 +310,7 @@ def main():
 
         # 11. --next skips an out-of-table first candidate instead of aborting on it
         StubTracker.candidates = [
-            {"sequenceId": "big", "startNumber": "999", "composite": str(N), "digits": 200},
+            {"sequenceId": "big", "startNumber": "999", "composite": str(N), "digits": 210},
             {"sequenceId": SEQ_ID, "startNumber": START_NUMBER, "composite": str(N), "digits": 160}]
         assert cli.main([*common, "--next", "--workdir", str(tmp / "run11"), "--dry-run"]) == 0
         print("11 --next skip-to-runnable OK")
