@@ -19,6 +19,7 @@ first; logic next.
 - `schema.sql` — SQLite metadata schema (raw `.ms` blobs live on disk, not in the DB).
 - `bootstrap-polyselect-client.sh` — one-shot GPU-worker setup (clone+build msieve, configure).
 - `pull.sh` — pull the corpus to a workstation over SSH (+ optional prune).
+- `copy-poly.sh` — resolve an aliquot start number and copy its local corpus and `worktodo.ini` into `~/msieve-s`.
 
 ## Quickstart (planned — Phase 1 in progress)
 
