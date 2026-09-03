@@ -75,11 +75,11 @@ polynomials have been found:
 | Digits | `min_coeff` = `high_coeff_mult` | `num_polys` |
 |---|---|---|
 | `< C145` | — (too small; run msieve directly) | — |
-| `< C156` | 420 | 400,000 |
-| `< C166` | 2,520 | 800,000 |
-| `< C177` | 27,720 | 1,200,000 |
-| `< C188` | 138,600 | 1,600,000 |
-| `≥ C188` | set `--min-coeff --high-coeff-mult --num-polys` yourself | |
+| `< C159` | 420 | 400,000 |
+| `< C173` | 2,520 | 800,000 |
+| `< C187` | 27,720 | 1,200,000 |
+| `< C201` | 138,600 | 1,600,000 |
+| `≥ C201` | set `--min-coeff --high-coeff-mult --num-polys` yourself | |
 
 Override any tier value with `--min-coeff` / `--high-coeff-mult` / `--num-polys` (all three to
 run a composite above the table). `collengine=gerbicz` is always used.
