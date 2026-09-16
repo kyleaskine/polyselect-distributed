@@ -84,6 +84,20 @@ polynomials have been found:
 Override any tier value with `--min-coeff` / `--high-coeff-mult` / `--num-polys` (all three to
 run a composite above the table). `collengine=gerbicz` is always used.
 
+**Resuming.** msieve appends to `msieve.dat.ms`, so a run cut short can be continued with
+`--resume`: it counts the polys already in `<workdir>/<sequenceId>/msieve.dat.ms`, restarts at
+`min_coeff = last leading coeff + 1` (msieve rounds that up to the next multiple of
+`high_coeff_mult`), and searches only for the rest of `num_polys`. If the target is already met
+it skips msieve. Without `--resume`, polylocal refuses to run into a non-empty corpus, since that
+would repeat the search and duplicate its polys. On a CUDA build a single Ctrl-C finishes the
+coefficient in flight, so resume loses nothing. After a second (hard) Ctrl-C — or on a CPU-only
+msieve, where even the first Ctrl-C aborts the coefficient immediately — the last coefficient is
+only partly searched, and resume does not revisit it.
+
+```bash
+python3 -m polylocal --start-number 1512 --resume
+```
+
 > **Requires the patched `msieve-s`.** The `num_polys=` stop is a small patch to the
 > `kyleaskine/msieve-s` fork (stage 1: count emitted polys on the single-thread stage-2 pool,
 > trip the existing soft-stop at the target; `num_polys=0` = unchanged). An **unpatched** msieve

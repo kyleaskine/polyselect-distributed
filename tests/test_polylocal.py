@@ -6,6 +6,8 @@ real HTTP against a stub tracker. Stdlib + httpx only; no GPU, no real msieve/CA
 
 The real-msieve coeff_list=1 contract still needs validating on a GPU box (DESIGN.md §7).
 """
+import contextlib
+import io
 import json
 import os
 import pathlib
@@ -321,6 +323,64 @@ def main():
         assert cli.main([*common, "--next", "--workdir", str(tmp / "run12"), "--submit"]) == 0
         assert StubTracker.submissions == []
         print("12 --submit corpus-only no-op OK")
+
+        # 13. --resume: scan the corpus, start past its last coeff, search only the remainder;
+        #     a leftover corpus without --resume is refused; a met target never launches msieve;
+        #     a corpus for a different composite is refused; no corpus yet -> a fresh run.
+        StubTracker.candidates = cands                          # digits=160 -> (2520, 2520, 800000)
+        wd13 = tmp / "run13"
+        sd = wd13 / SEQ_ID
+        sd.mkdir(parents=True)
+        (sd / "worktodo.ini").write_text(f"{N}\n")
+        (sd / "msieve.dat.ms").write_text("".join(
+            f"n: {N}\nc5: {c}\nc4: 1\nc3: 2\nc2: 3\nc1: 4\nc0: 5\nY1: 6\nY0: -7\n\n"
+            for c in (2520, 2520, 5040, 5040, 5040)))
+        assert cli._scan_corpus(sd / "msieve.dat.ms") == (5, 5040, 3)
+        sel13 = [*common, "--start-number", "552", "--workdir", str(wd13)]
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            assert cli.main([*sel13, "--resume", "--dry-run"]) == 0
+        assert "min_coeff=5041" in out.getvalue(), out.getvalue()
+        assert f"num_polys={800_000 - 5}" in out.getvalue(), out.getvalue()
+        try:                                    # --min-coeff may not reach back into the corpus
+            cli.main([*sel13, "--resume", "--min-coeff", "2520", "--dry-run"])
+            assert False, "expected SystemExit for --min-coeff below the corpus's last coeff"
+        except SystemExit as e:
+            assert "--min-coeff" in str(e), e
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):   # ... but one above it wins over last + 1
+            assert cli.main([*sel13, "--resume", "--min-coeff", "7560", "--dry-run"]) == 0
+        assert "min_coeff=7560" in out.getvalue(), out.getvalue()
+        try:
+            cli.main([*sel13, "--dry-run"])
+            assert False, "expected SystemExit for a leftover corpus without --resume"
+        except SystemExit as e:
+            assert "--resume" in str(e), e
+        # a resumed run extends the corpus: real msieve opens the .ms with fopen(..., "a")
+        # (poly_skew.c), which the shared stub does not, so this case uses an appending stub.
+        appending = tmp / "appending_msieve"
+        write_exec(appending, "#!/usr/bin/env bash\n"
+                   "C=$(printf '%s\\n' \"$@\" | grep -oE 'min_coeff=[0-9]+' | cut -d= -f2)\n"
+                   "printf 'n: %s\\nc5: %s\\nc4: 1\\nc3: 2\\nc2: 3\\nc1: 4\\nc0: 9\\n"
+                   "Y1: 6\\nY0: -7\\n\\n' \"$(head -1 worktodo.ini)\" \"$C\" >> msieve.dat.ms\n")
+        assert cli.main([*sel13, "--msieve", str(appending), "--resume"]) == 0
+        assert cli._scan_corpus(sd / "msieve.dat.ms") == (6, 5041, 1)   # 5 kept + 1 appended
+        failing = tmp / "failing_msieve"
+        write_exec(failing, "#!/usr/bin/env bash\nexit 1\n")
+        assert cli.main([*sel13, "--msieve", str(failing), "--resume", "--num-polys", "5"]) == 0
+        # a corpus for a composite the sequence has moved past is refused the same way on both
+        # paths: --resume must not continue it, and a plain run must not append onto it.
+        (sd / "worktodo.ini").write_text("12345\n")
+        for extra in (["--resume"], []):
+            try:
+                cli.main([*sel13, *extra, "--dry-run"])
+                assert False, f"expected SystemExit for a different composite ({extra})"
+            except SystemExit as e:
+                assert "different composite" in str(e), e
+        wd13b = tmp / "run13b"
+        assert cli.main([*common, "--next", "--workdir", str(wd13b), "--resume"]) == 0
+        assert (wd13b / SEQ_ID / "msieve.dat.ms").exists()
+        print("13 --resume OK")
 
         print("POLYLOCAL TEST: ALL PASSED")
     finally:
