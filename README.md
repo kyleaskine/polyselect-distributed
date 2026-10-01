@@ -79,7 +79,8 @@ polynomials have been found:
 | `< C173` | 2,520 | 800,000 |
 | `< C187` | 27,720 | 1,200,000 |
 | `< C201` | 138,600 | 1,600,000 |
-| `≥ C201` | set `--min-coeff --high-coeff-mult --num-polys` yourself | |
+| `< C216` | 360,360 | 2,000,000 |
+| `≥ C216` | set `--min-coeff --high-coeff-mult --num-polys` yourself (likely deg 6 territory) | |
 
 Override any tier value with `--min-coeff` / `--high-coeff-mult` / `--num-polys` (all three to
 run a composite above the table). `collengine=gerbicz` is always used.
