@@ -337,18 +337,29 @@ def main():
         (sd / "msieve.dat.ms").write_text("".join(
             f"n: {N}\nc5: {c}\nc4: 1\nc3: 2\nc2: 3\nc1: 4\nc0: 5\nY1: 6\nY0: -7\n\n"
             for c in (2520, 2520, 5040, 5040, 5040)))
-        assert cli._scan_corpus(sd / "msieve.dat.ms") == (5, 5040, 3)
+        assert cli._scan_corpus(sd / "msieve.dat.ms") == (5, {2520, 5040})
         sel13 = [*common, "--start-number", "552", "--workdir", str(wd13)]
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             assert cli.main([*sel13, "--resume", "--dry-run"]) == 0
         assert "min_coeff=5041" in out.getvalue(), out.getvalue()
         assert f"num_polys={800_000 - 5}" in out.getvalue(), out.getvalue()
-        try:                                    # --min-coeff may not reach back into the corpus
-            cli.main([*sel13, "--resume", "--min-coeff", "2520", "--dry-run"])
-            assert False, "expected SystemExit for --min-coeff below the corpus's last coeff"
-        except SystemExit as e:
-            assert "--min-coeff" in str(e), e
+        # --min-coeff may reach back: the corpus's coeffs split the search into gaps, and a gap
+        # with no multiple of high_coeff_mult needs no run.
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            assert cli.main([*sel13, "--resume", "--min-coeff", "2520", "--dry-run"]) == 0
+        assert "min_coeff=5041" in out.getvalue() and "max_coeff" not in out.getvalue()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            assert cli.main([*sel13, "--resume", "--min-coeff", "420", "--high-coeff-mult", "420",
+                             "--dry-run"]) == 0
+        assert "min_coeff=420 max_coeff=2519" in out.getvalue(), out.getvalue()
+        assert "min_coeff=2521 max_coeff=5039" in out.getvalue(), out.getvalue()
+        assert cli._coeff_ranges(420, 840, {2520, 5040, 3780}) == [
+            (420, 2519), (2521, 5039), (5041, None)]         # 3780 isn't a multiple of 840
+        assert cli._coeff_ranges(100, 420, set()) == [(100, None)]
+        assert cli._coeff_ranges(1, 0, {5}) == [(1, 4), (6, None)]
         out = io.StringIO()
         with contextlib.redirect_stdout(out):   # ... but one above it wins over last + 1
             assert cli.main([*sel13, "--resume", "--min-coeff", "7560", "--dry-run"]) == 0
@@ -366,7 +377,39 @@ def main():
                    "printf 'n: %s\\nc5: %s\\nc4: 1\\nc3: 2\\nc2: 3\\nc1: 4\\nc0: 9\\n"
                    "Y1: 6\\nY0: -7\\n\\n' \"$(head -1 worktodo.ini)\" \"$C\" >> msieve.dat.ms\n")
         assert cli.main([*sel13, "--msieve", str(appending), "--resume"]) == 0
-        assert cli._scan_corpus(sd / "msieve.dat.ms") == (6, 5041, 1)   # 5 kept + 1 appended
+        assert cli._scan_corpus(sd / "msieve.dat.ms") == (6, {2520, 5040, 5041})  # 5 + 1 appended
+        # a gap-filling resume runs msieve per gap, counts num_polys down across them, and stops
+        # once the target is met; a Ctrl-C (a normal msieve return) also stops the remaining gaps.
+        wd13c = tmp / "run13c"
+        sc = wd13c / SEQ_ID
+        sc.mkdir(parents=True)
+        (sc / "worktodo.ini").write_text(f"{N}\n")
+        seed = "".join(f"n: {N}\nc5: {c}\nc4: 1\nc3: 2\nc2: 3\nc1: 4\nc0: 5\nY1: 6\nY0: -7\n\n"
+                       for c in (840, 1680, 2520))
+        (sc / "msieve.dat.ms").write_text(seed)
+        sel13c = [*common, "--start-number", "552", "--workdir", str(wd13c), "--resume",
+                  "--min-coeff", "420", "--high-coeff-mult", "420"]
+        recording = tmp / "recording_msieve"
+        write_exec(recording, "#!/usr/bin/env bash\n"
+                   "echo \"$@\" >> calls.txt\n"
+                   "C=$(printf '%s\\n' \"$@\" | grep -oE 'min_coeff=[0-9]+' | cut -d= -f2)\n"
+                   "printf 'n: %s\\nc5: %s\\nc4: 1\\nc3: 2\\nc2: 3\\nc1: 4\\nc0: 9\\n"
+                   "Y1: 6\\nY0: -7\\n\\n' \"$(head -1 worktodo.ini)\" \"$C\" >> msieve.dat.ms\n")
+        assert cli.main([*sel13c, "--msieve", str(recording), "--num-polys", "5"]) == 0
+        calls = (sc / "calls.txt").read_text().splitlines()
+        assert len(calls) == 2, calls                       # 3 polys + 2 = 5 stops before gap 3
+        assert "min_coeff=420 max_coeff=839" in calls[0] and "num_polys=2" in calls[0], calls
+        assert "min_coeff=841 max_coeff=1679" in calls[1] and "num_polys=1" in calls[1], calls
+        (sc / "msieve.dat.ms").write_text(seed)
+        (sc / "calls.txt").unlink()
+        ctrl_c = tmp / "ctrl_c_msieve"
+        write_exec(ctrl_c, "#!/usr/bin/env bash\n"
+                   "echo \"$@\" >> calls.txt\n"
+                   "trap 'exit 0' INT\n"
+                   "kill -INT $PPID\n"
+                   "sleep 10 & wait\n")
+        assert cli.main([*sel13c, "--msieve", str(ctrl_c), "--num-polys", "5"]) == 0
+        assert len((sc / "calls.txt").read_text().splitlines()) == 1
         failing = tmp / "failing_msieve"
         write_exec(failing, "#!/usr/bin/env bash\nexit 1\n")
         assert cli.main([*sel13, "--msieve", str(failing), "--resume", "--num-polys", "5"]) == 0

@@ -121,9 +121,10 @@ def _parse_args(argv):
     p.add_argument("--num-polys", dest="num_polys", type=int, default=None,
                    help="stop after this many raw polynomials (default: from the digit table)")
     p.add_argument("--resume", action="store_true",
-                   help="continue an interrupted run in <workdir>/<sequenceId>: count the polys "
-                        "already in msieve.dat.ms, start past its last leading coeff, and search "
-                        "only for the rest of num_polys")
+                   help="continue a run in <workdir>/<sequenceId>: count the polys already in "
+                        "msieve.dat.ms, start past its last leading coeff (or at --min-coeff), "
+                        "skip every coeff it already holds, and search only for the rest of "
+                        "num_polys")
 
     p.add_argument("--optimize", action="store_true",
                    help="run nfs_optimize.sh on the corpus and extract the best polynomial")
@@ -200,21 +201,22 @@ _COEFF_KEY = re.compile(r"^c(\d+):", re.MULTILINE)
 
 
 def _scan_corpus(path):
-    """Summarize an existing corpus for --resume: (poly_count, last_coeff, polys_at_last_coeff).
-    Every record has exactly one leading c<degree>: line (the highest c-index, read off the file's
-    head); range mode searches a_d in ascending order, so the largest is where the run stopped.
-    Returns (0, None, 0) if no record parses.
+    """Summarize an existing corpus for --resume: (poly_count, leading_coeffs). Every record has
+    exactly one leading c<degree>: line (the highest c-index, read off the file's head). Returns
+    (0, set()) if no record parses.
 
-    The ordering argument assumes one coefficient at a time. msieve's GPU threadpool runs
-    MIN(4, -t) coefficients concurrently (stage1_sieve_gpu.c), and polylocal never passes -t, so
-    msieve's default of one thread applies. Were that to change, the maximum would stop being a
-    watermark — a lower coefficient could still have been in flight when a hard stop killed it."""
+    A coefficient that yielded no polys leaves no record, so it is not in leading_coeffs. Range
+    mode searches a_d in ascending order, so the largest is where a run stopped. That assumes one
+    coefficient at a time: msieve's GPU threadpool runs MIN(4, -t) coefficients concurrently
+    (stage1_sieve_gpu.c), and polylocal never passes -t, so msieve's default of one thread
+    applies. Were that to change, a lower coefficient could still have been in flight when a hard
+    stop killed it."""
     with open(path, encoding="utf-8", errors="replace") as f:
         degrees = [int(i) for i in _COEFF_KEY.findall(f.read(1 << 16))]
     if not degrees:
-        return 0, None, 0
+        return 0, set()
     lead = f"c{max(degrees)}:"
-    count, last, at_last = 0, None, 0
+    count, coeffs = 0, set()
     with open(path, encoding="utf-8", errors="replace") as f:
         for line in f:
             if not line.startswith(lead):
@@ -224,11 +226,8 @@ def _scan_corpus(path):
             except ValueError:            # a record torn by a hard kill mid-write
                 continue
             count += 1
-            if c == last:
-                at_last += 1
-            elif last is None or c > last:
-                last, at_last = c, 1
-    return count, last, at_last
+            coeffs.add(c)
+    return count, coeffs
 
 
 def _corpus_matches_composite(workdir, n):
@@ -244,12 +243,13 @@ def _corpus_matches_composite(workdir, n):
 def _resume_params(corpus, params, *, min_coeff_given):
     """--resume: fold an existing corpus into the range-mode params. `corpus` is the
     msieve.dat.ms to continue, or None when there is nothing to resume yet. Returns
-    (min_coeff, num_polys, done), where done=True means the corpus already meets num_polys.
+    (min_coeff, num_polys, done, coeffs), where done=True means the corpus already meets num_polys
+    and coeffs is the leading coeffs the corpus holds, which the search must skip.
 
     min_coeff = last + 1: msieve rounds min_coeff up to the next multiple of high_coeff_mult
     (stage1.c search_coeffs), which is the next coefficient the interrupted run would have taken.
-    An explicit --min-coeff wins but may not reach back into the range already searched. The last
-    coefficient is not revisited: on a CUDA build one Ctrl-C finishes the coefficients in flight
+    An explicit --min-coeff wins and may reach back below last. A coefficient already in the
+    corpus is never revisited: on a CUDA build one Ctrl-C finishes the coefficients in flight
     (stage1.c arms the soft stop only under HAVE_CUDA), but after a second, hard Ctrl-C — or on a
     CPU-only build, where the first one aborts immediately — it is only partly searched.
 
@@ -259,22 +259,37 @@ def _resume_params(corpus, params, *, min_coeff_given):
     min_coeff, _, num_polys = params
     if corpus is None:
         print("[resume] no corpus to continue yet; starting fresh", flush=True)
-        return min_coeff, num_polys, False
-    found, last, at_last = _scan_corpus(corpus)
-    if last is None:
+        return min_coeff, num_polys, False, set()
+    found, coeffs = _scan_corpus(corpus)
+    if not coeffs:
         raise SystemExit(f"error: {corpus} is non-empty but has no parseable polynomial records")
-    if min_coeff_given and min_coeff <= last:
-        raise SystemExit(f"error: --min-coeff {min_coeff} is at or below the corpus's last leading "
-                         f"coeff {last}, so msieve would append a duplicate search; drop "
-                         f"--min-coeff to continue at {last + 1}.")
+    last = max(coeffs)
     start = min_coeff if min_coeff_given else last + 1
     remaining = max(num_polys - found, 0) if num_polys else 0   # num_polys=0 (no limit) stays 0
     done = bool(num_polys) and remaining == 0
     plan = ("num_polys already met; skipping msieve" if done
             else f"min_coeff={start} num_polys={remaining}")
-    print(f"[resume] {corpus}: {found} polys, last coeff {last} ({at_last} polys) -> {plan}",
-          flush=True)
-    return start, remaining, done
+    print(f"[resume] {corpus}: {found} polys across {len(coeffs)} coeffs, last coeff {last} "
+          f"-> {plan}", flush=True)
+    return start, remaining, done, coeffs
+
+
+def _coeff_ranges(start, high_coeff_mult, skip):
+    """Split the search from `start` upward around the coeffs in `skip`: an ascending list of
+    (min_coeff, max_coeff) with max_coeff None on the final, open-ended range. msieve's range
+    enumerator can't skip individual coefficients, but it can be run on the gaps between them,
+    and it stays the one place that decides which multiples are smooth enough to search.
+
+    Only multiples of high_coeff_mult can come up, so other skipped coeffs don't split a range,
+    and a gap with no multiple in it needs no run. high_coeff_mult=0 means msieve's own default
+    multiplier, which isn't known here, so every gap gets a run."""
+    mult = high_coeff_mult or 1
+    ranges, lo = [], start
+    for coeff in sorted(c for c in skip if c >= start and c % mult == 0):
+        if (coeff - 1) // mult * mult >= lo:
+            ranges.append((lo, coeff - 1))
+        lo = coeff + 1
+    return ranges + [(lo, None)]
 
 
 def _size_for(digits):
@@ -288,19 +303,33 @@ def _size_for(digits):
     return "big"
 
 
-def _run_selection(msieve, n, params, workdir, *, gpu):
+def _run_selection(msieve, n, params, workdir, ranges, *, gpu):
     # Local range mode: no coeff_list to curate. msieve enumerates smooth leading coeffs
-    # a_d = k*high_coeff_mult from min_coeff upward and stops after num_polys polynomials
-    # (our msieve num_polys= patch). collengine=gerbicz always (strictly better).
-    min_coeff, high_coeff_mult, num_polys = params
+    # a_d = k*high_coeff_mult across each of `ranges` (see _coeff_ranges) and stops after
+    # num_polys polynomials in total (our msieve num_polys= patch), one run per range.
+    # collengine=gerbicz always (strictly better).
+    _, high_coeff_mult, num_polys = params
     wd = msieve_runner.build_workdir(str(workdir), n, msieve_bin=str(msieve))  # no coeff_list.txt
+    corpus = pathlib.Path(wd) / "msieve.dat.ms"
+    found_before = _scan_corpus(corpus)[0] if corpus.is_file() else 0
     # forward_sigint: this is an interactive one-shot, so relay a terminal Ctrl-C into msieve's
     # own (separate) process group. msieve stops the search gracefully, keeping the polys it
-    # already wrote, and the pipeline continues with that partial corpus.
-    return msieve_runner.run(str(msieve), str(wd), gpu=gpu, collengine="gerbicz",
-                             coeff_list=False, min_coeff=min_coeff,
-                             high_coeff_mult=high_coeff_mult, num_polys=num_polys,
-                             forward_sigint=True)
+    # already wrote, and the pipeline continues with that partial corpus — so a Ctrl-C must also
+    # stop the remaining ranges here.
+    interrupted = []
+    remaining = num_polys
+    for i, (lo, hi) in enumerate(ranges):
+        out = msieve_runner.run(str(msieve), str(wd), gpu=gpu, collengine="gerbicz",
+                                coeff_list=False, min_coeff=lo, max_coeff=hi,
+                                high_coeff_mult=high_coeff_mult, num_polys=remaining,
+                                forward_sigint=True, on_sigint=lambda: interrupted.append(True))
+        if interrupted or i == len(ranges) - 1:
+            break
+        if num_polys:                     # 0 = no limit, so there is nothing to count down
+            remaining = num_polys - (_scan_corpus(out)[0] - found_before)
+            if remaining <= 0:
+                break
+    return out
 
 
 def _prepare_supplied(text, n):
@@ -371,28 +400,32 @@ def main(argv=None):
             # (and msieve would append the new composite's polys onto it).
             raise SystemExit(f"error: {corpus} holds polynomials for a different composite (the "
                              f"sequence advanced); move {workdir} aside to start over.")
-        done = False
+        done, skip = False, set()
         if a.resume:
-            min_coeff, num_polys, done = _resume_params(corpus if prior else None, params,
-                                                        min_coeff_given=a.min_coeff is not None)
+            min_coeff, num_polys, done, skip = _resume_params(
+                corpus if prior else None, params, min_coeff_given=a.min_coeff is not None)
         elif prior:
             # msieve appends, so a fresh run here would re-search from the table's min_coeff
             # and duplicate the polys already in the corpus.
             raise SystemExit(f"error: {corpus} already holds polynomials. Pass --resume to "
                              f"continue that run, or move {workdir} aside to start over.")
+        ranges = _coeff_ranges(min_coeff, high_coeff_mult, skip)
         if not done:
-            preview = msieve_runner.build_argv(str(msieve or "msieve"), gpu=gpu,
-                                              collengine="gerbicz", coeff_list=False,
-                                              min_coeff=min_coeff,
-                                              high_coeff_mult=high_coeff_mult, num_polys=num_polys)
             print(f"[select] min_coeff={min_coeff} high_coeff_mult={high_coeff_mult} "
-                  f"num_polys={num_polys} -> {workdir}\n         {' '.join(preview)}", flush=True)
+                  f"num_polys={num_polys} ranges={len(ranges)} -> {workdir}", flush=True)
+            for lo, hi in ranges:
+                preview = msieve_runner.build_argv(str(msieve or "msieve"), gpu=gpu,
+                                                  collengine="gerbicz", coeff_list=False,
+                                                  min_coeff=lo, max_coeff=hi,
+                                                  high_coeff_mult=high_coeff_mult,
+                                                  num_polys=num_polys)
+                print(f"         {' '.join(preview)}", flush=True)
         if a.dry_run:
             print("[dry-run] not running msieve; not submitting.")
             return 0
         if not done:
             corpus = _run_selection(msieve, n, (min_coeff, high_coeff_mult, num_polys),
-                                    workdir, gpu=gpu)
+                                    workdir, ranges, gpu=gpu)
         print(f"[corpus] {corpus} ({corpus.stat().st_size} bytes)", flush=True)
         if not a.optimize:
             if a.submit:

@@ -61,15 +61,16 @@ def _link_support_files(workdir: pathlib.Path, ms_dir: pathlib.Path) -> None:
 
 def build_argv(msieve_bin: str, *, gpu: int, high_coeff_mult: int = 0,
                collengine: str = "gerbicz", coeff_list: bool = True,
-               min_coeff: int | None = None, num_polys: int | None = None) -> list[str]:
+               min_coeff: int | None = None, max_coeff: int | None = None,
+               num_polys: int | None = None) -> list[str]:
     """Build the msieve stage-1 argv. Two modes:
 
       coeff_list (default): read a_d from coeff_list.txt — the distributed path. high_coeff_mult
         is inert here (only the range enumerator reads it; DESIGN.md §7), emitted only when
         nonzero for back-compat.
       range (coeff_list=False): let msieve enumerate smooth leading coeffs a_d = k*high_coeff_mult
-        from min_coeff upward, stopping after num_polys polynomials (the num_polys= patch). Used
-        by polylocal for a single local run so no coeff_list needs curating.
+        from min_coeff upward (to max_coeff, if given), stopping after num_polys polynomials (the
+        num_polys= patch). Used by polylocal for a single local run so no coeff_list needs curating.
 
     No colllib=/sortlib=: build_workdir symlinks cub/ so msieve's relative defaults resolve.
     """
@@ -81,6 +82,8 @@ def build_argv(msieve_bin: str, *, gpu: int, high_coeff_mult: int = 0,
     else:
         if min_coeff is not None:
             parts.append(f"min_coeff={min_coeff}")
+        if max_coeff is not None:
+            parts.append(f"max_coeff={max_coeff}")
         if high_coeff_mult:
             parts.append(f"high_coeff_mult={high_coeff_mult}")
         if num_polys:
@@ -109,29 +112,33 @@ def _terminate(proc: subprocess.Popen) -> None:
 
 def run(msieve_bin: str, workdir: str, *, gpu: int, high_coeff_mult: int = 0,
         collengine: str = "gerbicz", coeff_list: bool = True, min_coeff: int | None = None,
-        num_polys: int | None = None, cancel=None, poll: float = 2.0,
-        forward_sigint: bool = False) -> pathlib.Path:
+        max_coeff: int | None = None, num_polys: int | None = None, cancel=None,
+        poll: float = 2.0, forward_sigint: bool = False, on_sigint=None) -> pathlib.Path:
     """Run msieve in `workdir`; return the path to msieve.dat.ms.
 
     Runs in its own process group (start_new_session=True) so the client can
     SIGTERM/SIGKILL the whole GPU job on cancel without racing the parent. `cancel` is a
     no-arg callable polled every `poll` seconds; truthy → kill the child and raise Cancelled.
     Assumes build_workdir already linked the support files into `workdir`. See build_argv for
-    coeff_list vs range mode (min_coeff/num_polys).
+    coeff_list vs range mode (min_coeff/max_coeff/num_polys).
 
     Because the child is in its own session, a terminal Ctrl-C reaches only the parent, not
     msieve. `forward_sigint=True` (the interactive polylocal path) installs a SIGINT handler
     that relays the signal into the child's process group, so msieve stops itself gracefully —
     it flushes the polys already found to msieve.dat.ms and exits, and this returns that
     partial corpus normally. Off by default: polyclient wants the hard cancel path above.
+    `on_sigint`, if given, is called on each relayed signal, since that normal return otherwise
+    looks like a finished search.
     """
     argv = build_argv(msieve_bin, gpu=gpu, high_coeff_mult=high_coeff_mult,
                       collengine=collengine, coeff_list=coeff_list,
-                      min_coeff=min_coeff, num_polys=num_polys)
+                      min_coeff=min_coeff, max_coeff=max_coeff, num_polys=num_polys)
     proc = subprocess.Popen(argv, cwd=workdir, start_new_session=True)
     prev_sigint = None
     if forward_sigint:
         def _relay(_signum, _frame):
+            if on_sigint:
+                on_sigint()
             try:
                 os.killpg(os.getpgid(proc.pid), signal.SIGINT)
             except ProcessLookupError:

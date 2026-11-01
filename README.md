@@ -95,6 +95,12 @@ coefficient in flight, so resume loses nothing. After a second (hard) Ctrl-C —
 msieve, where even the first Ctrl-C aborts the coefficient immediately — the last coefficient is
 only partly searched, and resume does not revisit it.
 
+`--resume` skips every leading coefficient already in the corpus, so you can change
+`--high-coeff-mult` or pass a lower `--min-coeff` partway through. msieve can't skip individual
+coefficients, so polylocal runs it once per gap between them (`min_coeff=… max_coeff=…`);
+`--dry-run` lists those runs. `--num-polys` is still a total across the whole corpus. A
+coefficient that yielded no polys leaves no record, so going back over one searches it again.
+
 ```bash
 python3 -m polylocal --start-number 1512 --resume
 ```
